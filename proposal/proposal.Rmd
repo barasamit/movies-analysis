@@ -1,0 +1,379 @@
+---
+title: "Project proposal"
+author: "AF"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+    echo = TRUE, # show all code
+    tidy = FALSE, # cleaner code printing
+    size = "small", # smaller code
+    
+    fig.path = "figures/", #graphics location
+    out.width = "100%",
+
+    message = FALSE,
+    warning = FALSE
+    )
+
+```
+
+```{r load-packages, message = FALSE}
+library(knitr)
+library(tidyverse)
+library(broom)
+library(htmltools)
+library(ggrepel)
+library(ggpubr)
+library(stringr)
+library(scales)
+library(lubridate)
+library(gganimate)
+library(gapminder)
+library(GGally)
+library(cowplot)
+```
+
+
+
+## 1. Introduction
+
+Everyone loves a good movie! 
+
+Movie industry is a multi-billion-dollar business. Lots of movies are being released in every year. All of these movies have different features, budget, cast crew, etc. but one thing is in common - all want to be successful. Success of a movie depends on various factors of past and present. Identifying the right factors can predict the profitability, rating and award winning of a movie that we define as the most important criteria for movie's success. 
+Some of the factors in predicting movie success are budget, actors, director, IMDB vote count, social fan following and likes, etc. Movie's success prediction plays an indispensable job in the film industry, some researchers over the years predicted success of a movie by it's profitability or IMDB rating, In this project, we will test various factors and find a movie's success model that consider both in addition to award winning of a movie. 
+The success can not be predicted based on one specific factor, what makes it harder to analyze.
+Our main goal in this project is to find out what are the most significant factors and connections that influence our success indicators by analysis and manipulations of our data, what causes the difference between the ups and downs of the success indicators, and try to explain the reasons for this in a scientific and research way.
+
+
+## 2. Data
+
+         
+The data for the project included two datasets that was taken from Kaggle and one dataset that we will scrap from IMDB site later in the project, with the released month for each movie respectively (attached links and code in Appendix section). 
+We joined these three datasets that gathered the most relevant data for our project, discarded unnecessary variables and null values, and manipulated some variables to find helpful new variables for our prediction, as ROI and binary values for Oscar winner and success movies as succeed gathers all three factor : winner, gross and imdb score.
+
+
+```{r, eval=TRUE}
+undesired <- c('color','actor_3_facebook_likes',"actor_2_name","actor_3_name","facenumber_in_poster","plot_keywords" ,"movie_imdb_link","num_user_for_reviews","language","country","actor_2_facebook_likes","aspect_ratio")
+
+```
+
+```{r, eval=TRUE}
+Oscar_file <- read.csv('../data/the_oscar_award.csv')%>% rename(movie_title = film)%>%
+select(movie_title,winner) %>%
+filter(winner == "True") %>% distinct()  #filter Oscar winners
+
+Movies_file_5000 <- read.csv('../data/movie_metadata.csv')
+Movies_file_5000$movie_title <- substring(Movies_file_5000$movie_title, 1, nchar(Movies_file_5000$movie_title)-2)  ##remove suffix from movie title
+
+movies = merge(x = Movies_file_5000, y =  Oscar_file, by = "movie_title", all.x = TRUE) %>%
+select(-one_of(undesired)) %>% 
+mutate(ROI = (gross/budget)) #join and remove/add columns
+
+movies["winner"][is.na(movies["winner"])] <- 0
+movies["winner"][movies["winner"] == "True"] <- 1
+movies = movies %>% drop_na(gross) %>% drop_na(budget)
+
+movies$genres = str_extract(movies$genres,"(\\w+)") # extract only one genre
+movies$winner = as.numeric(as.character(movies$winner))
+movies =  movies %>% rename(main_actor = actor_1_name, main_actor_facebook_likes = actor_1_facebook_likes)
+
+mean_gross = mean(movies$gross)
+mean_imdb = round(mean(movies$imdb_score),3) 
+
+movies$succeed = ifelse(movies$gross < mean_gross,0,
+                        ifelse(movies$imdb_score < mean_imdb,0,
+                               ifelse(movies$winner != 1,0,1)))
+
+glimpse(movies)
+```
+### Data README
+
+```{r, eval=TRUE}
+cat(readLines('../data/README.md'), sep = '\n')
+```
+
+```{r, eval=TRUE}
+cat("The data contain",ncol(movies), "variables")
+cat("\n")
+cat("The data contain",nrow(movies), "movies")
+```
+
+## 3. Preliminary results
+
+In the next section we will examine some charts that might help us get a little sense about our data and the way we will analyze it further in our research.
+First of all, we want to get a quick view on our data distribution, so we will extract the number of Oscar winners and the mean value of two factors: gross and IMDB score, these factors are the factors that we mentioned above as critic for success.
+
+```{r, eval=TRUE}
+cat("The number of Oscar winner movies is:",sum(movies$winner))
+cat("\n")
+cat("The mean gross is:",mean_gross, "$")
+cat("\n")
+cat("The mean IMDB score is:",mean_imdb)
+cat("\n")
+cat("The number of successful movies is:",sum(movies$succeed))
+
+
+```
+
+After we calculated our decisive values for success, we can see that there is not many observation for Oscar winner movies, so it will be hard to get a reliable insights from this amount of observation, so we will divide the data into few groups: 
+
+successful - gross above average, score above average and won the Oscar
+without winner - gross above average, score above average and did not win the Oscar
+without score - gross above average, score underneath average and won the Oscar
+without gross - gross underneath average, score above average and won the Oscar
+only winner - gross underneath average, score underneath average and won the Oscar
+only score - gross underneath average, score above average and did not win the Oscar
+only gross - gross above average, score underneath average and did not win the Oscar
+unsuccessful - gross underneath average, score underneath average and did not win the Oscar
+
+```{r, eval=TRUE}
+## best film in account of gross,ROI,imdb rating, oscar winner
+best_movies = (movies %>% 
+            filter(gross >= mean_gross,imdb_score >= mean_imdb,winner == 1) )
+
+# two succeed parameters from three
+two_from_three_no_winner = movies %>% 
+              filter((gross >= mean_gross) & (imdb_score >= mean_imdb) & (winner == 0))
+              
+two_from_three_no_gross = movies %>% 
+  filter((gross < mean_gross) & (imdb_score >= mean_imdb) & (winner == 1))
+
+two_from_three_no_score = movies %>% 
+  filter((gross >= mean_gross) & (imdb_score < mean_imdb) & (winner == 1)) 
+
+#one succeed parameter
+winner_one = movies %>% 
+              filter((gross < mean_gross) & (imdb_score < mean_imdb) & (winner == 1))
+score_one = movies %>% 
+              filter((gross < mean_gross) & (imdb_score >= mean_imdb) & (winner == 0))
+gross_one = movies %>% 
+              filter((gross >= mean_gross) & (imdb_score < mean_imdb) & (winner == 0))
+
+## all other movies
+not_best_movies = (movies %>% 
+            filter(gross < mean_gross,imdb_score < mean_imdb) )%>% drop_na(duration)
+
+## get numric columns
+num_cols1 <- unlist(lapply(best_movies, is.numeric))
+num_cols2 <- unlist(lapply(two_from_three_no_winner, is.numeric))
+num_cols3 <- unlist(lapply(two_from_three_no_score, is.numeric))
+num_cols4 <- unlist(lapply(two_from_three_no_gross, is.numeric))
+num_cols5 <- unlist(lapply(winner_one, is.numeric))
+num_cols6 <- unlist(lapply(score_one, is.numeric))
+num_cols7 <- unlist(lapply(gross_one, is.numeric))
+num_cols8 <- unlist(lapply(not_best_movies, is.numeric))
+
+numric_cols1 <- best_movies[ , num_cols1]
+numric_cols2 <- two_from_three_no_winner[ , num_cols2]
+numric_cols3 <- two_from_three_no_score[ , num_cols3]
+numric_cols4 <- two_from_three_no_gross[ , num_cols4]
+numric_cols5 <- winner_one[ , num_cols5]
+numric_cols6 <- score_one[ , num_cols6]
+numric_cols7 <- gross_one[ , num_cols7]
+numric_cols8 <- not_best_movies[ , num_cols8]
+
+
+best_movies_means = (as.data.frame.list(colMeans(numric_cols1)))
+two_from_three_no_winner_means = (as.data.frame.list(colMeans(numric_cols2)))
+two_from_three_no_score_means = (as.data.frame.list(colMeans(numric_cols3))) 
+two_from_three_no_gross_means = (as.data.frame.list(colMeans(numric_cols4)))
+winner_one_means = (as.data.frame.list(colMeans(numric_cols5))) 
+score_one_means = (as.data.frame.list(colMeans(numric_cols6)))
+gross_one_means = (as.data.frame.list(colMeans(numric_cols7)))
+not_best_movies_means = (as.data.frame.list(colMeans(numric_cols8)))
+
+
+## combine dfs
+means_df = best_movies_means
+means_df[nrow(means_df) + 1,] <- head(two_from_three_no_winner_means,1)
+means_df[nrow(means_df) + 1,] <- head(two_from_three_no_score_means,1)
+means_df[nrow(means_df) + 1,] <- head(two_from_three_no_gross_means,1)
+means_df[nrow(means_df) + 1,] <- head(winner_one_means,1)
+means_df[nrow(means_df) + 1,] <- head(score_one_means,1)
+means_df[nrow(means_df) + 1,] <- head(gross_one_means,1)
+means_df[nrow(means_df) + 1,] <- head(not_best_movies_means,1)
+
+
+means_df['group name'] = c('successful','without winner','without score','without gross','only winner','only score','only gross','unsucceeful')
+
+means_df <- subset(means_df, select=c(15,1,2,3,4,6,7,8,11,13))
+
+means_df
+```
+
+as we expected, there is a decent different between the successful movies groups to the others,
+but which factors are effect more than others on these successful parameters ?
+let's get a quick view on the table above by some charts.
+
+```{r, eval=TRUE}
+
+p1 = ggplot(aes(x = means_df$`group name`, y = num_critic_for_reviews,fill=num_critic_for_reviews), data = means_df) +
+  geom_bar(stat = 'identity') +labs(x = "group")+theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=0.3))
+p2 = ggplot(aes(x = means_df$`group name`, y = duration ,fill=duration), data = means_df) +
+  geom_bar(stat = 'identity') +
+ labs(x = "group")+theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=0.3))
+p3 = ggplot(aes(x = means_df$`group name`, y = num_voted_users
+,fill=num_voted_users
+), data = means_df) +
+  geom_bar(stat = 'identity') +
+ labs(x = "group")+theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=0.3))
+p4 = ggplot(aes(x = means_df$`group name`, y = movie_facebook_likes,fill=movie_facebook_likes), data = means_df) +
+  geom_bar(stat = 'identity') +
+ labs(x = "group")+theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=0.3))
+p5 = ggplot(aes(x = means_df$`group name`, y = budget,fill=budget), data = means_df) +
+  geom_bar(stat = 'identity') +
+ labs(x = "group")+theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=0.3))
+p6 = ggplot(aes(x = means_df$`group name`, y = ROI,fill=ROI), data = means_df) +
+  geom_bar(stat = 'identity') +
+ labs(x = "group")+theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=0.3))
+ggarrange(p1, p2,p3,p4,p5,p6, widths = c(10,10,10,10,10,10))
+
+```
+
+Now, we will summarize some main insights from those charts:
+
+- There is a correlation between successful movies to successful movies that did not win the Oscar in almost all parameters. as we mentioned above, there is not many observation for winner award movies and that is the reason.
+
+- All the social impact parameters, such as, movie facebook likes, votes and reviews are much higher in successful movies than all the other groups, even a lot more than successful movies that did not win the Oscar. That is make sense, successful movies have higher social exposure and apparently that Oscar title has a big impact on it.
+
+- There is not correlation between budget and ROI, which means that production that invested more than others are not have to be more profitability. In addition, the group that invested the most has lower imdb score than others, so higher investment do not insure better score.
+
+
+As we can see, there is many insights we can find in our data and we will keep investigating these insights and others in the rest of our project. 
+
+In the next charts we will try to find connection to genres.
+
+Let's make a scatter plot showing the worldwide gross revenue over the production budget. Let's make the color of the point relative to whether the movie won an Oscar title or not. Let's add a "breakeven" line that has a slope of 1 and a y-intercept of zero. Let's facet by genre. 
+
+```{r, eval=TRUE}
+movies %>%
+  ggplot(aes(budget, gross)) +
+  geom_point(aes(col = as.factor(winner))) +
+  geom_abline(slope = 1, intercept = 0, col = "red") +
+  facet_wrap( ~ genres) +
+  scale_x_log10(labels = dollar_format()) +
+  scale_y_log10(labels = dollar_format()) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title="Profabilty by genres",x = "Production Budget", 
+       y = "Worldwide gross revenue", 
+       size = "Return on Investment")
+```
+Generally it seems that the points distribution is around the "breakeven" line. It is make a little sense - if movies weren't profitable at all they wouldn't keep making them but there is many movies that can not return all the investment they invested, and that is why we are here :) 
+Another insight from this plot is that Proportionally there seem to be many more blue points (which indicate won) above the line, so it seems that movies that won the Oscar are more profitable.
+
+In addition to our groups of data, we tried to find any correlation or important insights from our factors, directors and actor, to success.
+
+
+```{r, eval=TRUE}
+actor <- (movies %>%
+            group_by(main_actor) %>%
+            summarise(num_of_win = sum(winner),imdb_score_avg = round(mean(imdb_score),1),gross = mean(gross),budget = mean(budget))%>% 
+            filter(num_of_win >= 2)%>% arrange(desc(num_of_win)) )[1:20,]
+             
+
+p = ggplot(actor, aes(x = reorder(main_actor, -num_of_win), num_of_win), group=1)+
+geom_bar(stat="identity", width = 0.5, fill="tomato2") + 
+      labs(title="Top 20 oscar winner actors",subtitle ="with Actor's avg imdb rating", y = "Number of wins", x = "Actor name") +
+geom_line(aes(x = main_actor, imdb_score_avg, group=1))+
+geom_line(aes(x = main_actor, imdb_score_avg, group=1,color = "blue"),size = 1)+
+geom_line(aes(x = main_actor, budget/20000000, group=1, color = "green"),size = 1)+
+geom_line(aes(x = main_actor, gross/20000000, group=1, color = "orange"),size = 1)+
+scale_color_identity(name = "Model fit",
+                          breaks = c("blue", "green", "orange"),
+                          labels = c("Imdb rating", "Avg budget of movies(*20*10^6)", "Avg gross of movies(*20*10^6)"),
+                          guide = "legend") + 
+      theme(axis.text.x = element_text(angle=88, vjust=0.6)) +
+  xlab("Actor name")
+p <- p + geom_point(aes(y=13.75), shape = 23, size = 6, fill = "#f5de50") 
+for(i in 1:length(actor$imdb_score_avg)){p <- p + geom_text(x=i, y=13.75,size = 3, label=actor$imdb_score_avg[i])} 
+
+p + scale_y_continuous(breaks=seq(0,20,2))  
+ 
+
+
+```
+
+```{r, eval=TRUE}
+director <- (movies %>%
+            group_by(director_name) %>%
+            summarise(num_of_win = sum(winner),imdb_score_avg = round(mean(imdb_score),1),gross = mean(gross),budget = mean(budget))%>% 
+            filter(num_of_win >= 2)%>% arrange(desc(num_of_win)) )[1:20,]
+             
+
+p = ggplot(director, aes(x = reorder(director_name, -num_of_win), num_of_win), group=1)+
+geom_bar(stat="identity", width = 0.5, fill="tomato2") + 
+      labs(title="Top 20 oscar winner directors",subtitle ="with Director's avg imdb rating", y = "Number of wins", x = "Director name") +
+geom_line(aes(x = director_name, imdb_score_avg, group=1))+
+geom_line(aes(x = director_name, imdb_score_avg, group=1,color = "blue"),size = 1)+
+geom_line(aes(x = director_name, budget/20000000, group=1, color = "green"),size = 1)+
+geom_line(aes(x = director_name, gross/20000000, group=1, color = "orange"),size = 1)+
+scale_color_identity(name = "Model fit",
+                          breaks = c("blue", "green", "orange"),
+                          labels = c("Imdb ratimg", "Avg budget of movies(*20*10^6)", "Avg gross of movies(*20*10^6)"),
+                          guide = "legend") + 
+      theme(axis.text.x = element_text(angle=88, vjust=0.6)) +
+  xlab("imdb_score_avg")
+p <- p + geom_point(aes(y=13.75), shape = 23, size = 6, fill = "#f5de50") 
+for(i in 1:length(director$imdb_score_avg)){p <- p + geom_text(x=i, y=13.75,size = 3, label=director$imdb_score_avg[i])} 
+
+p + scale_y_continuous(breaks=seq(0,20,2))  
+ 
+```
+as we can see, there is a connection between budget and gross, but rather than that there is not bold indication from each of the graphs, so these three factors depends on other factors from our data and our work is to find out which of them is the most important.
+
+The feature of director and actor’s name also has a large depth. Those variables are hard to fit in most algorithms and we have not seen any analysis that paid any attention to those variables. Therefore, we came up with an idea that doesn’t use the variables names , but keeps the useful information in the name features at the same time. Different Actors and Directors have different box office appeal and IMDB score, and it changes over time. The box office appeal and IMDB rating can be represented by history gross and IMDB Score. Generating these factors can be a key factor for predicting their next movie.  
+
+
+## 4. Data analysis plan
+
+
+The next steps of our project will be an extension to this proposal, we will dive deeper into our new insights and try to find them an explanation by our data and external researches.
+In addition we will fit to our data logistic regression algorithm that predict and Verifies the main factors for success: profitability, rating and Oscar reward.
+most of our work is going to be done by manipulation of our existing factors to create new helpful factors to use for the analyzing step. As we saw in the 3th graph, actors and director names are not that helpful in this form so we will calculate their average history imdb score and gross and use these values as parameter, instead of their names. In addition, as we mentioned in the beginning, we will use web scrapping method from imdb site by the movie's link that we have in the existing data, to find the release month of every movie in our data.  
+
+We believe that our vision of success movie parameters is something new, that has not been done yet, 
+and our division of groups, successful in all the three parametrs, only in two, etc, will lead us to many new insights about future movies.
+
+Teamwork: 
+
+The project is going to be divided according to individual tasks and responsibilities but in mutual sharing of information between the different paths of each of us at each stage of the project.
+
+Division of responsibilities:
+
+Amit B - Responsible for machine learning algorithm and web scrapping in the project 
+Yonatan - Responsible for data analysis and combining all the insights in the project
+Amit F- responsible for researches and data analysis in the project
+
+
+
+## Appendix
+
+Datesets :
+
+https://www.kaggle.com/datasets/carolzhangdc/imdb-5000-movie-dataset?select=movie_metadata.csv
+https://www.kaggle.com/datasets/unanimad/the-oscar-award
+
+code for scarpping the data:
+
+Movies_file_5000['mounth'] <- NA
+
+FUN <- function(x){
+  Sys.sleep(5)
+  movie_1 <- read_html(x)
+  mounth <- html_nodes(movie_1," li a ") %>% html_text()
+  word(mounth[which(mounth == "Release date") + 1],1)
+
+} 
+
+Movies_file_5000$mounth <- lapply(Movies_file_5000$movie_imdb_link, FUN)
+
+
+### Source code
+
+```{r, ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```

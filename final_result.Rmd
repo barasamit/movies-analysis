@@ -1,0 +1,799 @@
+---
+title: "Final report"
+output: html_document
+date: '2022-06-10'
+---
+
+```{r load-packages, message=FALSE}
+library(knitr)
+library(tidyverse)
+library(broom)
+library(htmltools)
+library(ggrepel)
+library(ggpubr)
+library(stringr)
+library(scales)
+library(lubridate)
+library(gganimate)
+library(gapminder)
+library(GGally)
+library(cowplot)
+library(caTools)
+library(ROCR) 
+library(dplyr)
+library(rvest)
+library(xml2)
+library(stringr)
+library(caret)
+require(corrplot)
+library(class)
+library(glmnet)
+library(fastDummies)
+library(caTools)
+library(party)
+
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    echo = TRUE, # show all code
+    tidy = FALSE, # cleaner code printing
+    size = "small", # smaller code
+    
+    fig.path = "figures/", #graphics location
+    out.width = "100%",
+
+    message = FALSE,
+    warning = FALSE
+    )
+```
+
+```{r}
+#rows to remove
+undesired <- c('color', 'actor_3_facebook_likes',"actor_2_name","actor_3_name","facenumber_in_poster","plot_keywords" ,"movie_imdb_link","num_user_for_reviews","language","country","actor_2_facebook_likes","aspect_ratio","X")
+
+```
+'num_critic_for_reviews',
+"num_voted_users",
+
+### clean and combine data frames with the new columns we added throw python
+the new variables are:
+1. avg_dir_rating - Director average IMDB rating by the films that preceded the current film  
+2. avg_dir_gross  - Director average gross by the films that preceded the current film  
+3. avg_act_rating  - Actor average IMDB rating by the films that preceded the current film 
+
+
+```{r, eval=TRUE}
+Oscar_file <- read.csv('./data/the_oscar_award.csv')%>% rename(movie_title = film)%>%
+select(movie_title,winner) %>%
+filter(winner == "True") %>% distinct()  #filter Oscar winners
+
+Movies_file_5000 <- read.csv('./data/movie_metadata_new.csv')
+Movies_file_5000$movie_title <- substring(Movies_file_5000$movie_title, 1, nchar(Movies_file_5000$movie_title)-2)  ##remove suffix from movie title
+
+movies = merge(x = Movies_file_5000, y =  Oscar_file, by = "movie_title", all.x = TRUE) %>%
+select(-one_of(undesired)) %>% 
+mutate(ROI = (gross/budget)) #join and remove/add columns
+
+movies["winner"][is.na(movies["winner"])] <- 0
+movies["winner"][movies["winner"] == "True"] <- 1
+
+```
+
+
+```{r, eval=TRUE}
+#We look for missing dataץ
+colSums(is.na(movies))
+mean(is.na(movies))
+```
+
+
+```{r, eval=TRUE}
+#only 2.9%, we are safe to delete them.
+movies = movies %>% drop_na(gross) %>% drop_na(budget)
+movies = drop_na(movies)
+
+
+```
+
+clean genres to the main genres of each movie
+```{r, eval=TRUE}
+movies$genres = str_extract(movies$genres,"(\\w+)") # extract only one genre
+movies$winner = as.numeric(as.character(movies$winner))
+movies =  movies %>% rename(main_actor = actor_1_name, main_actor_facebook_likes = actor_1_facebook_likes)
+glimpse(movies)
+```
+```{r, eval=TRUE}
+# numeric columns for prediction
+columns <- c()
+for(i in 1:dim(movies)[2])
+{
+  if(is.numeric(movies[,i])|| is.integer(movies[,i]))
+  {
+    columns[i]=T
+  }
+  else
+  {
+    columns[i]=F
+  }
+}
+movies = movies %>%
+  filter(grepl("(Drama|Comedy|Biography|Action|Animation|Adventure|Crime|Documentary)",genres))
+numric_data <- na.omit(movies[,columns])
+
+mean_gross = mean(numric_data$gross)
+mean_imdb = round(mean(numric_data$imdb_score),3)
+
+numric_data$succeed = ifelse(numric_data$gross < mean_gross,0,  ## add succeed
+                        ifelse(numric_data$imdb_score < mean_imdb,0,
+                               ifelse(numric_data$winner != 1,0,1)))
+
+numric_data[is.na(numric_data)] = 0 ## fill na with 0s'
+
+#succeeded = IMDB rating , gross > average for the same column and win an Oscar
+glimpse(numric_data)
+
+```
+ 
+## lets explore more connection between vars
+
+### Are the predicted vars impacted by the month?
+```{r, eval=TRUE}
+  ggplot(data = movies, aes(x = as.factor(month),fill= as.factor(genres))) + 
+  geom_bar() +
+       labs(title = " movie's release Month distribtion ", subtitle = 'by genres', x = "Month", y = "number of movies", fill='month' )  +
+  coord_flip()    
+```
+ 
+```{r, eval=TRUE}
+budget_by_month = movies %>% group_by(month,genres)%>% summarise(mean_budget = mean(budget),genres = genres) 
+# budget_by_month
+p1 = ggplot(budget_by_month, aes(x= as.factor(month), y= mean_budget/1000000, fill = as.factor(month))) +
+       geom_bar(aes(fill = as.factor(genres), show.legend = FALSE), stat='identity')  + theme(legend.position="none") + 
+       labs(title = "Movies mean budget by month", x = "Released Month", y = "mean budget")
+
+gross_by_month = movies %>% group_by(month,genres)%>% summarise(mean_gross = mean(gross),genres = genres) 
+# gross_by_month
+p2 = ggplot(gross_by_month, aes(x= as.factor(month), y= mean_gross/1000000, fill = as.factor(month))) +
+       geom_bar(aes(fill = as.factor(genres)), stat='identity')  + theme(legend.position="none") + 
+       labs(title = "Movies mean gross by month", x = "Released Month", y = "mean gross")
+
+ggarrange(p1, p2, widths = c(12,12)) 
+
+```
+
+
+```{r, eval=TRUE}
+imdb_by_month = movies %>% select(month, ROI, winner,genres) %>% group_by(month,genres)%>% summarise(mean_winner = mean(winner), mean_roi = mean(ROI), genres = genres) 
+# imdb_by_month
+p1 = ggplot(imdb_by_month, aes(x= as.factor(month), y= mean_imdb)) +
+       geom_bar(aes(fill = as.factor(genres)), stat='identity')+ theme(legend.position="none") + 
+       labs(title = "Movies mean imdb score", subtitle = "by month", x = "Released Month", y = "mean imdb")
+p2= ggplot(imdb_by_month, aes(x= as.factor(month), y= mean_winner)) +
+       geom_bar(aes(fill = as.factor(genres)), stat='identity') + 
+       labs(title = "Precentage of Oscar rewarded Movies", subtitle = "by month", x = "Released Month", y = "Oscar rewarded movies (%)")
+       
+ggarrange(p1, p2, widths = c(15,22)) 
+
+```
+```{r}
+## movies in July
+movies  %>% filter(month==7)  %>% arrange(desc(gross))
+```
+
+
+
+
+### Are the predicted vars impacted by the bodget and genres?
+
+```{r eval=TRUE, fig.height=5}
+ ggplot(data = movies, aes(x = genres, fill = genres)) + 
+  geom_bar(aes(y=100*(..count..)/sum(..count..))) + scale_fill_brewer(palette="Accent") + 
+  xlab("Movie genre") + ylab("Percentage (%)") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))+ theme(aspect.ratio = 1)
+
+```
+```{r, eval=TRUE}
+summary(movies$budget)
+
+```
+
+
+
+From the above plots, most of the movie in the data set are of Action/comedy/Drama genre. Therefore, we must keep in mind that id we going to use it in our prediction.
+```{r, eval=TRUE}
+
+## connection between genres gross and budget
+movies$budgetclass[movies$budget >= 2.180e+02 & movies$budget < 1.000e+07] <-"low budget"
+
+movies$budgetclass[movies$budget >= 1.000e+07 & movies$budget <= 4.520e+07] <-"medium budget"
+
+movies$budgetclass[movies$budget > 4.520e+07 & movies$budget <= 1.222e+10] <-"high budget"
+
+movies$budgetclass <- as.factor(movies$budgetclass)
+
+means_df = movies %>% 
+  group_by(genres,budgetclass) %>% 
+  summarise(mean_db = mean(imdb_score),mean_g = mean(gross),mean_w = mean(winner)) 
+
+
+ 
+ggplot(means_df, aes(x=mean_g, y=genres))+ geom_col(aes(fill = genres))+ 
+facet_wrap(~budgetclass)
+  
+
+ggplot(means_df, aes(x=mean_w, y=genres))+ geom_col(aes(fill = genres))+ 
+facet_wrap(~budgetclass)
+
+ggplot(means_df, aes(x=mean_db, y=genres))+ geom_col(aes(fill = genres))   +
+facet_wrap(~budgetclass) 
+
+
+
+```
+If we want to make a movie with high gross sadly we have to spend high budget on our movies. Eventough, in movie with comedy or drama genre we found that the highest gross is not coming from highest class budget but from middle class budget this anomaly can be further analyze which might give us some inside on how this could happen.
+
+Also we can see that we not always need a high budget to win an Oscar, especially on Drama genre
+
+Same in IMDB_score.
+
+```{r, eval=TRUE}
+genres_by_gross = movies %>% group_by(genres)%>% summarise(mean_gross = mean(gross)) 
+# genres_by_gross
+
+# plot
+genres_by_gross %>%
+  filter(!is.na(mean_gross)) %>%
+  arrange(mean_gross) %>%
+  mutate(genres=factor(genres, genres)) %>%
+  ggplot( aes(x=genres, y=mean_gross) ) +
+    geom_segment( aes(x=genres ,xend=genres, y=0, yend=mean_gross), color="grey") +
+    geom_point(size=3, color="#69b3a2") +
+    coord_flip() +
+    
+    theme(
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.position="none"
+    ) +
+    xlab("genres")
+```
+```{r, eval=TRUE}
+genres_by_imdb = movies %>% group_by(genres)%>% summarise(mean_imdb = mean(imdb_score)) 
+genres_by_imdb
+
+# plot
+genres_by_imdb %>%
+  filter(!is.na(mean_imdb)) %>%
+  arrange(mean_imdb) %>%
+  mutate(genres=factor(genres, genres)) %>%
+  ggplot( aes(x=genres, y=mean_imdb) ) +
+    geom_segment( aes(x=genres ,xend=genres, y=0, yend=mean_imdb), color="grey") +
+    geom_point(size=3, color="#69b3a2") +
+    coord_flip() +
+    
+    theme(
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.position="none"
+    ) +
+    xlab("genres")
+```
+
+```{r, eval=TRUE}
+genres_by_winner = movies %>% group_by(genres) %>% summarise(mean_winner = mean(winner)) 
+
+genres_by_winner
+
+# plot
+genres_by_winner %>%
+  filter(!is.na(mean_winner)) %>%
+  arrange(mean_winner) %>%
+  mutate(genres=factor(genres, genres)) %>%
+  ggplot( aes(x=genres, y=mean_winner) ) +
+    geom_segment( aes(x=genres ,xend=genres, y=0, yend=mean_winner), color="grey") +
+    geom_point(size=3, color="#69b3a2") +
+    coord_flip() +
+    
+    theme(
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.position="none"
+    ) +
+    xlab("genres")
+```
+
+```{r, eval=TRUE}
+genres_by_roi = movies %>% group_by(genres) %>% summarise(mean_roi = mean(ROI)) 
+
+genres_by_roi
+
+# plot
+genres_by_roi %>%
+  filter(!is.na(mean_roi)) %>%
+  arrange(mean_roi) %>%
+  mutate(genres=factor(genres, genres)) %>%
+  ggplot( aes(x=genres, y=mean_roi) ) +
+    geom_segment( aes(x=genres ,xend=genres, y=0, yend=mean_roi), color="grey") +
+    geom_point(size=3, color="#69b3a2") +
+    coord_flip() +
+    
+    theme(
+      panel.grid.minor.y = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.position="none"
+    ) +
+    xlab("genres")
+```
+
+### Is there an association between ththe predicted var and the total amount of facebook likes? 
+
+```{r, eval=TRUE}
+ p1 = movies%>%
+  ggplot(aes(imdb_score, cast_total_facebook_likes,fill= as.factor(winner)))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "IMDB score",
+       y = "Cast facebook likes")+
+  theme(legend.position = "none")
+p2 = movies%>%
+  ggplot(aes(imdb_score, main_actor_facebook_likes))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "IMDB score",
+       y = "Main actor facebook likes")+
+  theme(legend.position = "none")
+p3 = movies%>%
+  ggplot(aes(imdb_score, director_facebook_likes))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "IMDB score",
+       y = "Director facebook likes")+
+  theme(legend.position = "none")
+ggarrange(p1, p2,p3, widths = c(8,8,8))
+```
+לכתוב משהו על זה שלא נראת השפעה חוץ מהבמאי
+
+
+```{r, eval=TRUE}
+p1 = movies%>%
+  ggplot(aes(gross, cast_total_facebook_likes))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "Gross",
+       y = "Cast facebook likes")+
+  theme(legend.position = "none")
+p2 = movies%>%
+  ggplot(aes(gross, main_actor_facebook_likes))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "Gross",
+       y = "Main actor facebook likes")+
+  theme(legend.position = "none")
+p3 = movies%>%
+  ggplot(aes(gross, director_facebook_likes))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "Gross",
+       y = "Director facebook likes")+
+  theme(legend.position = "none")
+ggarrange(p1, p2,p3, widths = c(8,8,8)) 
+```
+Seems like an inverse connection 
+### Does the num_critic_for_reviews  of the movie affect the predicting vars?
+
+```{r}
+p1 = movies%>%
+  ggplot(aes(log(num_critic_for_reviews), gross))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "num_critic_for_reviews",
+       y = "gross")+
+  theme(legend.position = "none")
+p2 = movies%>%
+  ggplot(aes(num_voted_users, gross))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "num_voted_users",
+       y = "gross")+
+  theme(legend.position = "none")
+
+ggarrange(p1, p2, widths = c(8,8))
+```
+
+```{r}
+p1 = movies%>%
+  ggplot(aes(num_voted_users, gross))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "num_voted_users",
+       y = "gross")+
+  theme(legend.position = "none")
+p2 = movies%>%
+  ggplot(aes(num_critic_for_reviews, gross))+
+  geom_jitter(aes(color = winner),width=0.1, height = 0.1, alpha = 0.5)+
+  geom_smooth(se = FALSE)+
+  labs(x = "num_critic_for_reviews",
+       y = "gross")+
+  theme(legend.position = "none")
+
+ggarrange(p1, p2, widths = c(8,8))
+```
+
+### Does the runtime of the movie affect the predicting vars?
+
+```{r eval=TRUE}
+ggplot(data = movies, aes(x = duration)) + 
+geom_histogram(binwidth = 0.5, color="black", fill="pink", alpha=1,
+             aes(y=..density..), alpha=1) + geom_density(lwd = 0.8, color = "green") + 
+             xlab("Film Run Time (min)") + ylab("Density") +
+  bgcolor("#BFD5E3")+
+  border("#BFD5E3")
+
+```
+
+
+look like almost normal distribution - good for measurement  
+
+```{r}
+p1 = ggplot(movies, aes(duration, imdb_score,color = as.factor(winner) ))+
+  geom_jitter(width = 0.1, height = 0.1, alpha = 0.75)+
+  geom_smooth(se=FALSE)+
+  labs(x = "Runtime (min)", y = "IMDB score" , color='Winner') +
+  bgcolor("#BFD5E3")+
+  border("#BFD5E3")
+
+p2 = ggplot(movies, aes(duration, gross,color = as.factor(winner)))+
+  geom_jitter(width = 0.1, height = 0.1, alpha = 0.75)+
+  geom_smooth(se=FALSE)+
+  labs(x = "Runtime (min)",y = "Gross" , color='Winner') +
+  bgcolor("#BFD5E3")+
+  border("#BFD5E3")
+
+ggarrange(p1, p2,nrow = 2) 
+
+
+```
+לחרטט משהו- י. אדלר
+
+### Does the new variables  affect the predicting vars?
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+p1 = ggplot(movies, aes(x=avg_act_gross/1000000, y=gross/1000000, shape = as.factor(winner),color = as.factor(winner))) + 
+  geom_point() +
+  labs(title = "movie gross", subtitle = "by main actor average gross", x = "avg actor gross(in millions)", y = "movie gross(in millions)", color='Winner',shape = "Winner")+scale_colour_manual(values = c("gold3", "dark red"))+
+  geom_smooth()
+
+p2 = ggplot(movies, aes(x=avg_act_rating, y=imdb_score, color = as.factor(winner), shape = as.factor(winner))) + 
+  geom_point() +
+  labs(title = "movie rating", subtitle ="by main actor average rating",  x = "avg actor IMDB rating", y = "movie IMDB rating", color='Winner',shape = "Winner")+scale_colour_manual(values = c("gold3", "dark red"))+
+  geom_smooth()
+
+p3 = ggplot(movies, aes(x=avg_dir_gross/1000000, y=gross/1000000, color = as.factor(winner), shape = as.factor(winner))) + 
+  geom_point() +
+  labs(title = "movie gross", subtitle ="by director average gross", x = "avg director gross(in millions)", y = "movie gross(in millions)", color='Winner',shape = "Winner")+ scale_colour_manual(values = c("gold3", "dark red"))+
+ geom_smooth()
+
+p4 = ggplot(movies, aes(x=avg_dir_rating, y=imdb_score, color = as.factor(winner), shape = as.factor(winner))) + 
+  geom_point() +
+  labs(title = "movie rating", subtitle = "by director average rating", x = "avg director IMDB rating", y = "movie IMDB rating", color='Winner',shape = "Winner" ) + scale_colour_manual(values = c("gold3", "dark red"))+
+  geom_smooth() 
+
+
+ggarrange(p1, p2,p3,p4, widths = c(10,10,10,10)) 
+```
+
+
+
+
+We can see from the plot above there is kind of linear connection between our new vars and IMDB score.
+
+### Connection actor director 
+```{r}
+glimpse(movies)
+```
+
+#### most common due
+```{r}
+dir_act = movies
+
+dir_act$count = 1
+
+
+dir_act = dir_act %>%
+  group_by(director_name, main_actor) %>%
+  summarise(join_movies=sum(count),
+            g_mean=(mean(gross)),imdb_mean=(mean(imdb_score)) ,winner_sum=(sum(winner)),  .groups = 'drop')
+
+dir_act <-dir_act[order(-dir_act$g_mean),] %>% filter(join_movies > 1) 
+
+
+
+# top_dir_act
+m_common = dir_act %>% filter(join_movies==max(dir_act$join_movies))
+print(paste("is most common due is:" ,m_common$director_name,"and",m_common$main_actor, "with",m_common$join_movies, "joint movies together" ))
+
+dir_act
+```
+#### top gross / imdb/Oscar winners leading dues:
+```{r message=TRUE, warning=FALSE}
+top_dir_act_g <- head(arrange(dir_act, desc(g_mean)), n = 10)
+
+
+top_dir_act_g
+top_dir_act_g %>%
+  arrange(desc(g_mean)) %>%
+  top_n(10, g_mean) %>%
+  ggplot(aes(x=imdb_mean, y=g_mean/1000000)) +
+  geom_point( ) +
+  geom_smooth() + 
+  labs(x = "imdb_mean score", y = "Gross (in million)", title = "Top 10 dues by gross with their imdb score")
+```
+
+```{r}
+top_dir_act_imdb <- head(arrange(dir_act, desc(imdb_mean)), n = 10)
+
+
+top_dir_act_imdb %>%
+  arrange(desc(g_mean)) %>%
+  top_n(10, g_mean) %>%
+  ggplot(aes(x=g_mean, y=g_mean)) +
+  geom_point(aes(color= as.factor(join_movies),size= as.factor(join_movies)) ) +
+  geom_smooth() + 
+ 
+  labs(x = "Imdb_mean score", y = "Gross (in million)", title = "Top 10 dues by gross with their imdb score",color="join_movies",size= "join_movies")
+top_dir_act_imdb
+```
+```{r}
+top_dir_act_w <- head(arrange(dir_act, desc(winner_sum)), n = 10)
+
+top_dir_act_w
+top_dir_act_w %>%
+  arrange(desc(winner_sum)) %>%
+  top_n(10, winner_sum) %>%
+  ggplot(aes(x=imdb_mean, y=winner_sum)) +
+  geom_point( ) +
+  geom_smooth() + 
+ 
+  labs(x = "imdb_mean score", y = "number of oscar winning", title = "Top 10 dues by winner sum with their imdb score")
+```
+
+```{r}
+data_common <- generics::intersect(top_dir_act_g, top_dir_act_imdb)  # Apply intersect function
+data_common <- generics::intersect(data_common, top_dir_act_w)
+data_common
+```
+the due that is in the top 10 in 3 categories are Peter Jackson and Christopher Lee	that 	
+
+
+
+
+
+Is difficult to judge the exact formula as these sites don’t reveal them. We have considered the deciding variables for our predicting model from the common factors. 
+
+
+## Modeling
+
+### First lets try predict if the movie going to win an Oscar with logistic regression
+```{r, eval=TRUE}
+#Normalizing the data
+normalize <- function(x) {
+  + return((x-min(x))/ (max(x) - min(x)))
+  
+}
+## all numeric columns we need after normalizing
+logistic_data <- as.data.frame(lapply(numric_data[,c(1:3,5:6,9:15)], normalize))
+glimpse(logistic_data)
+```
+
+```{r, eval=TRUE}
+# Splitting dataset
+set.seed(170)
+
+split <- sample.split(numric_data, SplitRatio = 0.8)
+
+   
+train_reg <- subset(numric_data, split == "TRUE")
+test_reg <- subset(numric_data, split == "FALSE")
+```
+
+check train split 
+```{r}
+winners_train = train_reg %>% filter(winner == 1)
+los_train = train_reg %>% filter(winner == 0)
+nrow(winners_train)
+nrow(los_train)
+nrow(los_train)/nrow(winners_train)
+
+```
+
+
+
+Imbalanced classification is a supervised learning problem where one class outnumbers other class by a large proportion. This problem is faced more frequently in binary classification problems than multi-level classification problems.
+
+we will use Oversampling
+This method works with minority class. It replicates the observations from minority class to balance the data. It is also known as upsampling. Similar to undersampling, this method also can be divided into two types: Random Oversampling and Informative Oversampling.
+
+Random oversampling balances the data by randomly oversampling the minority class. Informative oversampling uses a pre-specified criterion and synthetically generates minority class observations.
+
+An advantage of using this method is that it leads to no information loss. The disadvantage of using this method is that, since oversampling simply adds replicated observations in original data set, it ends up adding multiple observations of several types, thus leading to overfitting. Although, the training accuracy of such data set will be high, but the accuracy on unseen data will be worse.
+
+```{r}
+winners_train$ntime = 9
+winners_train = winners_train[rep(seq_len(nrow(winners_train)), winners_train$ntime),] ## duplicate rows
+winners_train = subset(winners_train, select = -c(ntime) )
+train_reg = rbind(winners_train , los_train)
+```
+
+
+
+
+```{r, eval=TRUE}
+# Training model
+#Since we are working with a binomial distribution(dependent variable), we need to choose a link function that is best suited for this distribution.
+logistic_model <- glm(winner ~ avg_act_gross + avg_dir_gross + cast_total_facebook_likes + duration + avg_act_rating + avg_dir_rating +ROI + director_facebook_likes + main_actor_facebook_likes + movie_facebook_likes + month ,data = train_reg, family = "binomial")
+```
+
+
+```{r, eval=TRUE}
+# Summary
+summary(logistic_model)$coef
+predict_reg <- predict(logistic_model, test_reg, type = "response")
+
+# Changing probabilities - high threshold to be sure in our predictions 
+predict_reg <- ifelse(predict_reg >0.5, 1, 0)
+```
+The output above shows the estimate of the regression beta coefficients and their significance levels. The intercept (b0) is -15 and the coefficient of most significant avg_dir_rating variable is 1.06
+
+```{r, eval=TRUE}
+# Evaluating model accuracy
+# using confusion matrix
+table(test_reg$winner, predict_reg)
+missing_classerr <- mean(predict_reg != test_reg$winner)
+print(paste('Accuracy =', 1 - missing_classerr))
+ROCPred <- prediction(predict_reg, test_reg$winner) 
+ROCPer <- performance(ROCPred, measure = "tpr", x.measure = "fpr")
+auc <- performance(ROCPred, measure = "auc")
+auc <- auc@y.values[[1]]
+# Plotting curve
+plot(ROCPer, colorize = TRUE, 
+     print.cutoffs.at = seq(0.1, by = 0.1), 
+     main = "ROC CURVE")
+abline(a = 0, b = 1)
+   
+auc <- round(auc, 4)
+legend(.6, .4, auc, title = "AUC", cex = 1)
+```
+pretty good
+
+#### Now we going to predict same as above but with knn method to check our model
+```{r, eval=TRUE}
+#Actual Data
+
+idx_test_1_temp <- numric_data[seq(1, nrow(numric_data), by = 5),][1:17]
+
+idx_train_1_temp <- numric_data[-seq(1, nrow(numric_data), by = 5),][1:17]
+
+
+
+test_1_temp <- idx_test_1_temp[,-15]
+training_1_temp <- idx_train_1_temp[,-15]
+
+training_target_temp <- idx_train_1_temp[,15]
+
+test_target_temp <- idx_test_1_temp[,15]
+
+```
+
+
+
+
+in the knn method we didnt use sample replication what cause a high accuracy same as was in the model before we did the replication אין לי כוח להמשיך לכתוב על זה עוד
+
+## now we going to predict if the movie succeeded in the same way:
+```{r, eval=TRUE}
+# Splitting dataset
+set.seed(170)
+
+split <- sample.split(numric_data, SplitRatio = 0.8)
+
+   
+train_reg <- subset(numric_data, split == "TRUE")
+test_reg <- subset(numric_data, split == "FALSE")
+```
+
+check train split 
+```{r}
+winners_train = numric_data %>% filter(succeed == 1)
+los_train = train_reg %>% filter(succeed == 0)
+nrow(winners_train)
+nrow(los_train)
+nrow(los_train)/nrow(winners_train)
+
+```
+```{r}
+winners_train$ntime = 14
+winners_train = winners_train[rep(seq_len(nrow(winners_train)), winners_train$ntime),] ## duplicate rows
+winners_train = subset(winners_train, select = -c(ntime) )
+train_reg = rbind(winners_train , los_train)
+```
+
+```{r, eval=TRUE}
+
+
+logistic_model <- glm(succeed ~ avg_act_gross + avg_dir_gross + cast_total_facebook_likes + duration + avg_act_rating + avg_dir_rating +ROI + director_facebook_likes + main_actor_facebook_likes + movie_facebook_likes + month ,data = train_reg, family = "binomial")
+
+```
+
+
+
+```{r, eval=TRUE}
+# Summary
+summary(logistic_model)$coef
+predict_reg <- predict(logistic_model, test_reg, type = "response")
+
+# Changing probabilities - high threshold to be sure in our predictions 
+predict_reg <- ifelse(predict_reg >0.5, 1, 0)
+```
+The output above shows the estimate of the regression beta coefficients and their significance levels. The intercept (b0) is -16 and the coefficient of most significant avg_dir_rating variable is 1.2
+
+```{r, eval=TRUE}
+# Evaluating model accuracy
+# using confusion matrix
+table(test_reg$winner, predict_reg)
+missing_classerr <- mean(predict_reg != test_reg$winner)
+print(paste('Accuracy =', 1 - missing_classerr))
+ROCPred <- prediction(predict_reg, test_reg$winner) 
+ROCPer <- performance(ROCPred, measure = "tpr", x.measure = "fpr")
+auc <- performance(ROCPred, measure = "auc")
+auc <- auc@y.values[[1]]
+# Plotting curve
+plot(ROCPer, colorize = TRUE, 
+     print.cutoffs.at = seq(0.1, by = 0.1), 
+     main = "ROC CURVE")
+abline(a = 0, b = 1)
+   
+auc <- round(auc, 4)
+legend(.6, .4, auc, title = "AUC", cex = 1)
+```
+
+
+
+### try to bulid decietion tree for multi class classifiction  :
+
+e
+```{r}
+classfic_df = movies
+
+```
+
+```{r}
+summary(classfic_df$imdb_score)
+summary(classfic_df$gross)
+```
+
+
+
+
+```{r}
+# "bad_R & bad_G"
+movies$score_class[movies$imdb_score  < 6.600 & movies$gross < 27979400] <-1
+
+movies$score_class[movies$imdb_score  >= 6.600 & movies$gross < 27979400] <-2
+
+movies$score_class[movies$imdb_score  < 6.600 & movies$gross >= 27979400] <-3
+
+movies$score_class[movies$imdb_score  >= 6.600 & movies$gross >= 27979400] <-4
+```
+
+```{r}
+movies %>% group_by(score_class) %>% summarise(n = n())
+```
+```{r}
+ggplot(movies)+aes(y=log(gross),x=log(budget),color=score_class)+geom_point()+theme_classic()
+
+```
+*To be continued*
+
+
+
+
