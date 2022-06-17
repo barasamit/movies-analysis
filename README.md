@@ -1,9 +1,12 @@
 # movies-analysis
-# SISE2601 Project data description
-================
-Team name:AF
+Everyone loves a good movie!
 
-Lets explore every dimension:
+Movie industry is a multi-billion-dollar business. Lots of movies are being released in every year. All of these movies have different features, budget, cast crew, etc. but one thing is in common - all want to be successful. Success of a movie depends on various factors of past and present. Identifying the right factors can predict the profitability, rating and award winning of a movie that we define as the most important criteria for movie's success. Some of the factors in predicting movie success are budget, actors, director, IMDB vote count, social fan following and likes, etc. Movie's success prediction plays an indispensable job in the film industry, some researchers over the years predicted success of a movie by it's profitability or IMDB rating, In this project, we will test various factors and find a movie's success model that consider both in addition to award winning of a movie. The success can not be predicted based on one specific factor, what makes it harder to analyze.
+Our main goal in this project is to find out what are the most significant factors and connections that influence our success indicators by analysis and manipulations of our data, what causes the difference between the ups and downs of the success indicators, and try to explain the reasons for this in a scientific and research way.
+
+
+
+# Data overview
 
 1. movie_title: Title of the Movie  
 
@@ -41,4 +44,11 @@ NC-17 - Adults Only. No One 17 and Under Admitted. Clearly adult. Children are n
 15.winner: 1- if actor/director won an oscar, 0- if not.
 
 16. ROI: Return on investment, is a mathematical formula that use to evaluate investments and judge how well a particular investment has performed compared to others.
-formula: ROI = Net income / Cost of investment                      
+formula: ROI = Net income / Cost of investment 
+
+# References
+
+ 	Genres: https://screencraft.org/blog/this-movie-genre-box-office-king/
+ 	https://www.ukessays.com/essays/film-studies/director-influence-film-success-3738-7716.php
+ 	https://screencraft.org/blog/this-movie-genre-box-office-king/
+
