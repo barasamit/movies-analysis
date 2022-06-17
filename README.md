@@ -8,6 +8,8 @@ Our main goal in this project is to find out what are the most significant facto
 
 # Data overview
 
+To use the data yoy just need to run the code
+
 1. movie_title: Title of the Movie  
 
 2. director_name: Name of the Director of the Movie
